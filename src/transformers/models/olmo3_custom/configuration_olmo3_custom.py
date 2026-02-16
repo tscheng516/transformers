@@ -78,6 +78,12 @@ class Olmo3CustomConfig(PreTrainedConfig):
         layer_types (`list`, *optional*):
             Attention pattern for each layer. Defaults to sliding window attention
             for 3 out of 4 layers, and full attention for every 4th layer.
+        norm_pos (`str`, *optional*, defaults to `"mid"`):
+            Position of layer normalization in the transformer block. Options are:
+            - "pre": Pre-normalization (x = x + f(norm(x)))
+            - "post": Post-normalization (x = norm(x + f(x)))
+            - "mid": Mid-normalization (x = x + norm(f(x)))
+            - "sandwich": Sandwich normalization (x = x + norm(f(norm(x))))
 
     ```python
     >>> from transformers import Olmo3CustomModel, Olmo3CustomConfig
@@ -132,6 +138,7 @@ class Olmo3CustomConfig(PreTrainedConfig):
         rms_norm_eps: float | None = 1e-5,
         sliding_window: int | None = 4096,
         layer_types: list[str] | None = None,
+        norm_pos: str | None = "mid",
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -164,6 +171,12 @@ class Olmo3CustomConfig(PreTrainedConfig):
                 "sliding_attention" if (i + 1) % 4 != 0 else "full_attention" for i in range(self.num_hidden_layers)
             ]
         layer_type_validation(self.layer_types, self.num_hidden_layers)
+
+        # Validate and set norm_pos
+        valid_norm_pos = ["pre", "post", "mid", "sandwich"]
+        if norm_pos not in valid_norm_pos:
+            raise ValueError(f"Invalid norm_pos '{norm_pos}'. Must be one of {valid_norm_pos}. Got: {norm_pos}")
+        self.norm_pos = norm_pos
 
         self.rope_parameters = rope_parameters
 

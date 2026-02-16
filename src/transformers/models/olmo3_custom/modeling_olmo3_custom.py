@@ -228,11 +228,20 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config: Olmo3CustomConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
+        self.norm_pos = config.norm_pos
         self.self_attn = Olmo3CustomAttention(config=config, layer_idx=layer_idx)
 
         self.mlp = Olmo3CustomMLP(config)
+
+        # Normalization layers - naming kept for backward compatibility
+        # These will be used for post/mid normalization
         self.post_attention_layernorm = Olmo3CustomRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_feedforward_layernorm = Olmo3CustomRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        # Pre-normalization layers for pre-norm and sandwich-norm
+        if self.norm_pos in ["pre", "sandwich"]:
+            self.pre_attention_layernorm = Olmo3CustomRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            self.pre_feedforward_layernorm = Olmo3CustomRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -245,25 +254,92 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.Tensor:
+        # Self-attention block with configurable normalization position
         residual = hidden_states
-        hidden_states, _ = self.self_attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            cache_position=cache_position,
-            position_embeddings=position_embeddings,
-            **kwargs,
-        )
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = residual + hidden_states
 
-        # Fully Connected
+        if self.norm_pos == "pre":
+            # Pre-norm: x = x + f(norm(x))
+            hidden_states = self.pre_attention_layernorm(hidden_states)
+            hidden_states, _ = self.self_attn(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+            hidden_states = residual + hidden_states
+        elif self.norm_pos == "post":
+            # Post-norm: x = norm(x + f(x))
+            hidden_states, _ = self.self_attn(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+            hidden_states = residual + hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+        elif self.norm_pos == "mid":
+            # Mid-norm: x = x + norm(f(x))
+            hidden_states, _ = self.self_attn(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = residual + hidden_states
+        elif self.norm_pos == "sandwich":
+            # Sandwich-norm: x = x + norm(f(norm(x)))
+            hidden_states = self.pre_attention_layernorm(hidden_states)
+            hidden_states, _ = self.self_attn(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = residual + hidden_states
+
+        # MLP block with configurable normalization position
         residual = hidden_states
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = self.post_feedforward_layernorm(hidden_states)
-        hidden_states = residual + hidden_states
+
+        if self.norm_pos == "pre":
+            # Pre-norm: x = x + f(norm(x))
+            hidden_states = self.pre_feedforward_layernorm(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+        elif self.norm_pos == "post":
+            # Post-norm: x = norm(x + f(x))
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+            hidden_states = self.post_feedforward_layernorm(hidden_states)
+        elif self.norm_pos == "mid":
+            # Mid-norm: x = x + norm(f(x))
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = self.post_feedforward_layernorm(hidden_states)
+            hidden_states = residual + hidden_states
+        elif self.norm_pos == "sandwich":
+            # Sandwich-norm: x = x + norm(f(norm(x)))
+            hidden_states = self.pre_feedforward_layernorm(hidden_states)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = self.post_feedforward_layernorm(hidden_states)
+            hidden_states = residual + hidden_states
+
         return hidden_states
 
 
