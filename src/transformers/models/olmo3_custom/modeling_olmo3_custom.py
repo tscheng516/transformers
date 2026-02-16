@@ -473,9 +473,9 @@ class Olmo3CustomForCausalLM(Olmo3CustomPreTrainedModel, GenerationMixin):
         Example:
 
         ```python
-        >>> from transformers import AutoTokenizer, Olmo3ForCausalLM
+        >>> from transformers import AutoTokenizer, Olmo3CustomForCausalLM
 
-        >>> model = Olmo3ForCausalLM.from_pretrained("meta-olmo3/Olmo3-2-7b-hf")
+        >>> model = Olmo3CustomForCausalLM.from_pretrained("meta-olmo3/Olmo3-2-7b-hf")
         >>> tokenizer = AutoTokenizer.from_pretrained("meta-olmo3/Olmo3-2-7b-hf")
 
         >>> prompt = "Hey, are you conscious? Can you talk to me?"
