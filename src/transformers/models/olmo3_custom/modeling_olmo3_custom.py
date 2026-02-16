@@ -1,4 +1,3 @@
-
 # Copyright 2025 the HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -289,7 +288,7 @@ class Olmo3CustomRotaryEmbedding(nn.Module):
 
     @staticmethod
     def compute_default_rope_parameters(
-        config: Olmo3Config | None = None,
+        config: Olmo3CustomConfig | None = None,
         device: Optional["torch.device"] = None,
         seq_len: int | None = None,
     ) -> tuple["torch.Tensor", float]:
@@ -516,4 +515,4 @@ class Olmo3CustomForCausalLM(Olmo3CustomPreTrainedModel, GenerationMixin):
         )
 
 
-__all__ = ["Olmo3ForCausalLM", "Olmo3Model", "Olmo3PreTrainedModel"]
+__all__ = ["Olmo3CustomForCausalLM", "Olmo3CustomModel", "Olmo3CustomPreTrainedModel"]
