@@ -169,6 +169,31 @@ class Olmo3CustomModelTest(CausalLMModelTest, unittest.TestCase):
         with self.assertRaises(AssertionError):
             torch.testing.assert_close(yarn_sin_long, original_sin_long)
 
+    @parameterized.expand([("rmsnorm",), ("dyt",), ("derf",)])
+    def test_model_norm_types(self, norm_type):
+        """Test that the model can be instantiated with different normalization types."""
+        config, inputs = self.model_tester.prepare_config_and_inputs_for_common()
+
+        # Set the norm_type
+        config.norm_type = norm_type
+        if norm_type == "dyt":
+            config.alpha_init_value = 0.5
+        elif norm_type == "derf":
+            config.alpha_init_value = 0.5
+            config.shift_init_value = 0.1
+
+        # Test that the model can be instantiated and run
+        model = Olmo3CustomModel(config)
+        model.to(torch_device)
+        model.eval()
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        # Check that we get valid outputs
+        self.assertIsNotNone(outputs.last_hidden_state)
+        self.assertEqual(outputs.last_hidden_state.shape[0], inputs["input_ids"].shape[0])
+
 
 @require_torch
 class Olmo3CustomIntegrationTest(unittest.TestCase):
