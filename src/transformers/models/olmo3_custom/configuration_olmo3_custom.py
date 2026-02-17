@@ -84,6 +84,15 @@ class Olmo3CustomConfig(PreTrainedConfig):
             - "post": Post-normalization (x = norm(x + f(x)))
             - "mid": Mid-normalization (x = x + norm(f(x)))
             - "sandwich": Sandwich normalization (x = x + norm(f(norm(x))))
+        norm_type (`str`, *optional*, defaults to `"rmsnorm"`):
+            Type of normalization to use. Options are:
+            - "rmsnorm": RMS normalization (uses rms_norm_eps)
+            - "dyt": Dynamic Tanh normalization (uses alpha_init_value)
+            - "derf": Dynamic erf normalization (uses alpha_init_value and shift_init_value)
+        alpha_init_value (`float`, *optional*, defaults to 1.0):
+            Initial value for alpha parameter in DyT and Derf normalization.
+        shift_init_value (`float`, *optional*, defaults to 0.0):
+            Initial value for shift parameter in Derf normalization.
 
     ```python
     >>> from transformers import Olmo3CustomModel, Olmo3CustomConfig
@@ -139,6 +148,9 @@ class Olmo3CustomConfig(PreTrainedConfig):
         sliding_window: int | None = 4096,
         layer_types: list[str] | None = None,
         norm_pos: str | None = "mid",
+        norm_type: str | None = "rmsnorm",
+        alpha_init_value: float | None = 1.0,
+        shift_init_value: float | None = 0.0,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -177,6 +189,14 @@ class Olmo3CustomConfig(PreTrainedConfig):
         if norm_pos not in valid_norm_pos:
             raise ValueError(f"Invalid norm_pos '{norm_pos}'. Must be one of {valid_norm_pos}. Got: {norm_pos}")
         self.norm_pos = norm_pos
+
+        # Validate and set norm_type
+        valid_norm_types = ["rmsnorm", "dyt", "derf"]
+        if norm_type not in valid_norm_types:
+            raise ValueError(f"Invalid norm_type '{norm_type}'. Must be one of {valid_norm_types}. Got: {norm_type}")
+        self.norm_type = norm_type
+        self.alpha_init_value = alpha_init_value
+        self.shift_init_value = shift_init_value
 
         self.rope_parameters = rope_parameters
 
