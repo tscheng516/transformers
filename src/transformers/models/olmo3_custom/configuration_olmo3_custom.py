@@ -92,7 +92,10 @@ class Olmo3CustomConfig(PreTrainedConfig):
         alpha_init_value (`float`, *optional*, defaults to 1.0):
             Initial value for alpha parameter in DyT and Derf normalization.
         shift_init_value (`float`, *optional*, defaults to 0.0):
-            Initial value for shift parameter in Derf normalization.
+            Initial value for shift parameter in Derf and DyT normalization.
+        use_gated_attention (`bool`, *optional*, defaults to `False`):
+            Whether to use gated attention mechanism as described in "Gated Attention for Large Language Models".
+            When enabled, applies a gating mechanism to attention values using the same activation as the MLP.
 
     ```python
     >>> from transformers import Olmo3CustomModel, Olmo3CustomConfig
@@ -151,6 +154,7 @@ class Olmo3CustomConfig(PreTrainedConfig):
         norm_type: str | None = "rmsnorm",
         alpha_init_value: float | None = 1.0,
         shift_init_value: float | None = 0.0,
+        use_gated_attention: bool | None = False,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -197,6 +201,8 @@ class Olmo3CustomConfig(PreTrainedConfig):
         self.norm_type = norm_type
         self.alpha_init_value = alpha_init_value
         self.shift_init_value = shift_init_value
+
+        self.use_gated_attention = use_gated_attention
 
         self.rope_parameters = rope_parameters
 

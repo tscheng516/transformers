@@ -58,22 +58,24 @@ class Olmo3CustomRMSNorm(nn.Module):
 
 
 class Olmo3CustomDyT(nn.Module):
-    def __init__(self, hidden_size, alpha_init_value: float = 1.0) -> None:
+    def __init__(self, hidden_size, alpha_init_value: float = 1.0, shift_init_value: float = 0.0) -> None:
         """
         Dynamic Tanh normalization from "Stronger Normalization-Free Transformers"
         """
         super().__init__()
         self.hidden_size = hidden_size
         self.alpha_init_value = alpha_init_value
+        self.shift_init_value = shift_init_value
         self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
+        self.shift = nn.Parameter(torch.ones(1) * shift_init_value)
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.bias = nn.Parameter(torch.zeros(hidden_size))
 
     def forward(self, hidden_states) -> torch.Tensor:
-        return self.weight * torch.tanh(self.alpha * hidden_states) + self.bias
+        return self.weight * torch.tanh(self.alpha * hidden_states + self.shift) + self.bias
 
     def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, alpha_init_value={self.alpha_init_value}"
+        return f"{tuple(self.weight.shape)}, alpha_init_value={self.alpha_init_value}, shift_init_value={self.shift_init_value}"
 
 
 class Olmo3CustomDerf(nn.Module):
@@ -111,7 +113,9 @@ def create_norm_layer(config: Olmo3CustomConfig, hidden_size: int) -> nn.Module:
     if config.norm_type == "rmsnorm":
         return Olmo3CustomRMSNorm(hidden_size, eps=config.rms_norm_eps)
     elif config.norm_type == "dyt":
-        return Olmo3CustomDyT(hidden_size, alpha_init_value=config.alpha_init_value)
+        return Olmo3CustomDyT(
+            hidden_size, alpha_init_value=config.alpha_init_value, shift_init_value=config.shift_init_value
+        )
     elif config.norm_type == "derf":
         return Olmo3CustomDerf(
             hidden_size, alpha_init_value=config.alpha_init_value, shift_init_value=config.shift_init_value
@@ -218,6 +222,15 @@ class Olmo3CustomAttention(nn.Module):
         )
         self.q_norm = create_norm_layer(config, config.num_attention_heads * self.head_dim)
         self.k_norm = create_norm_layer(config, config.num_key_value_heads * self.head_dim)
+
+        # Gated attention mechanism
+        self.use_gated_attention = config.use_gated_attention
+        if self.use_gated_attention:
+            self.gate_proj = nn.Linear(
+                config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
+            )
+            self.act_fn = ACT2FN[config.hidden_act]
+
         assert config.layer_types is not None
         self.attention_type = config.layer_types[layer_idx]
         self.sliding_window = config.sliding_window if self.attention_type == "sliding_attention" else None
@@ -237,6 +250,10 @@ class Olmo3CustomAttention(nn.Module):
         query_states = self.q_norm(self.q_proj(hidden_states))
         key_states = self.k_norm(self.k_proj(hidden_states))
         value_states = self.v_proj(hidden_states)
+
+        # Gated attention: compute gate values if enabled
+        if self.use_gated_attention:
+            gate_states = self.gate_proj(hidden_states)
 
         query_states = query_states.view(hidden_shape).transpose(1, 2)
         key_states = key_states.view(hidden_shape).transpose(1, 2)
@@ -267,6 +284,12 @@ class Olmo3CustomAttention(nn.Module):
         )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+
+        # Apply gating mechanism if enabled
+        if self.use_gated_attention:
+            gate_states = self.act_fn(gate_states)
+            attn_output = attn_output * gate_states
+
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
 
