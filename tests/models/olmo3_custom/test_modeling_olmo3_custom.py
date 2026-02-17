@@ -178,6 +178,7 @@ class Olmo3CustomModelTest(CausalLMModelTest, unittest.TestCase):
         config.norm_type = norm_type
         if norm_type == "dyt":
             config.alpha_init_value = 0.5
+            config.shift_init_value = 0.1
         elif norm_type == "derf":
             config.alpha_init_value = 0.5
             config.shift_init_value = 0.1
@@ -193,6 +194,29 @@ class Olmo3CustomModelTest(CausalLMModelTest, unittest.TestCase):
         # Check that we get valid outputs
         self.assertIsNotNone(outputs.last_hidden_state)
         self.assertEqual(outputs.last_hidden_state.shape[0], inputs["input_ids"].shape[0])
+
+    def test_model_gated_attention(self):
+        """Test that the model can be instantiated with gated attention."""
+        config, inputs = self.model_tester.prepare_config_and_inputs_for_common()
+
+        # Enable gated attention
+        config.use_gated_attention = True
+
+        # Test that the model can be instantiated and run
+        model = Olmo3CustomModel(config)
+        model.to(torch_device)
+        model.eval()
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        # Check that we get valid outputs
+        self.assertIsNotNone(outputs.last_hidden_state)
+        self.assertEqual(outputs.last_hidden_state.shape[0], inputs["input_ids"].shape[0])
+
+        # Verify that gate_proj exists in attention layers when gated attention is enabled
+        self.assertTrue(hasattr(model.layers[0].self_attn, "gate_proj"))
+        self.assertTrue(hasattr(model.layers[0].self_attn, "act_fn"))
 
 
 @require_torch
