@@ -58,7 +58,7 @@ class Olmo3CustomRMSNorm(nn.Module):
 
 
 class Olmo3CustomDyT(nn.Module):
-    def __init__(self, hidden_size, alpha_init_value: float = 1.0, shift_init_value: float = 0.0) -> None:
+    def __init__(self, hidden_size, alpha_init_value: float = 0.5, shift_init_value: float = 0.0) -> None:
         """
         Dynamic Tanh normalization from "Stronger Normalization-Free Transformers"
         """
@@ -79,7 +79,7 @@ class Olmo3CustomDyT(nn.Module):
 
 
 class Olmo3CustomDerf(nn.Module):
-    def __init__(self, hidden_size, alpha_init_value: float = 1.0, shift_init_value: float = 0.0) -> None:
+    def __init__(self, hidden_size, alpha_init_value: float = 0.5, shift_init_value: float = 0.0) -> None:
         """
         Dynamic erf normalization from "Stronger Normalization-Free Transformers"
         """
