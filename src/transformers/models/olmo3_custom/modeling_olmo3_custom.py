@@ -220,16 +220,25 @@ class Olmo3CustomAttention(nn.Module):
         self.o_proj = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
         )
-        self.q_norm = create_norm_layer(config, config.num_attention_heads * self.head_dim)
-        self.k_norm = create_norm_layer(config, config.num_key_value_heads * self.head_dim)
+
+        # Intra-layer normalization: conditionally create norms for Q, K, V, C
+        self.intra_norm_pos = config.intra_norm_pos
+        if "q" in self.intra_norm_pos:
+            self.q_norm = create_norm_layer(config, config.num_attention_heads * self.head_dim)
+        if "k" in self.intra_norm_pos:
+            self.k_norm = create_norm_layer(config, config.num_key_value_heads * self.head_dim)
+        if "v" in self.intra_norm_pos:
+            self.v_norm = create_norm_layer(config, config.num_key_value_heads * self.head_dim)
+        if "c" in self.intra_norm_pos:
+            self.c_norm = create_norm_layer(config, config.num_attention_heads * self.head_dim)
 
         # Gated attention mechanism
         self.use_gated_attention = config.use_gated_attention
         if self.use_gated_attention:
             self.gate_proj = nn.Linear(
-                config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
+                config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias
             )
-            self.act_fn = ACT2FN[config.hidden_act]
+            self.act_fn = ACT2FN[config.attn_act]
 
         assert config.layer_types is not None
         self.attention_type = config.layer_types[layer_idx]
@@ -247,9 +256,15 @@ class Olmo3CustomAttention(nn.Module):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
-        query_states = self.q_norm(self.q_proj(hidden_states))
-        key_states = self.k_norm(self.k_proj(hidden_states))
+        query_states = self.q_proj(hidden_states)
+        if "q" in self.intra_norm_pos:
+            query_states = self.q_norm(query_states)
+        key_states = self.k_proj(hidden_states)
+        if "k" in self.intra_norm_pos:
+            key_states = self.k_norm(key_states)
         value_states = self.v_proj(hidden_states)
+        if "v" in self.intra_norm_pos:
+            value_states = self.v_norm(value_states)
 
         # Gated attention: compute gate values if enabled
         if self.use_gated_attention:
@@ -285,6 +300,10 @@ class Olmo3CustomAttention(nn.Module):
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
 
+        # Apply context (C) normalization if enabled (before gating and projection)
+        if "c" in self.intra_norm_pos:
+            attn_output = self.c_norm(attn_output)
+
         # Apply gating mechanism if enabled
         if self.use_gated_attention:
             gate_states = self.act_fn(gate_states)
@@ -319,15 +338,22 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
 
         self.mlp = Olmo3CustomMLP(config)
 
-        # Normalization layers - naming kept for backward compatibility
-        # These will be used for post/mid normalization
-        self.post_attention_layernorm = create_norm_layer(config, config.hidden_size)
-        self.post_feedforward_layernorm = create_norm_layer(config, config.hidden_size)
+        # Effective attention outer norm position: "hybrid" uses "pre" for attention
+        attn_norm_pos = "pre" if config.norm_pos == "hybrid" else config.norm_pos
+        self._attn_norm_pos = attn_norm_pos
+        self._ffn_norm_pos = config.ffn_norm_pos
 
-        # Pre-normalization layers for pre-norm and sandwich-norm
-        if self.norm_pos in ["pre", "sandwich"]:
+        # Attention normalization layers
+        if attn_norm_pos in ["pre", "sandwich"]:
             self.pre_attention_layernorm = create_norm_layer(config, config.hidden_size)
+        if attn_norm_pos in ["post", "mid", "sandwich"]:
+            self.post_attention_layernorm = create_norm_layer(config, config.hidden_size)
+
+        # FFN normalization layers
+        if self._ffn_norm_pos in ["pre", "sandwich"]:
             self.pre_feedforward_layernorm = create_norm_layer(config, config.hidden_size)
+        if self._ffn_norm_pos in ["post", "mid", "sandwich"]:
+            self.post_feedforward_layernorm = create_norm_layer(config, config.hidden_size)
 
     def forward(
         self,
@@ -343,7 +369,7 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
         # Self-attention block with configurable normalization position
         residual = hidden_states
 
-        if self.norm_pos == "pre":
+        if self._attn_norm_pos == "pre":
             # Pre-norm: x = x + f(norm(x))
             hidden_states = self.pre_attention_layernorm(hidden_states)
             hidden_states, _ = self.self_attn(
@@ -357,7 +383,7 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
                 **kwargs,
             )
             hidden_states = residual + hidden_states
-        elif self.norm_pos == "post":
+        elif self._attn_norm_pos == "post":
             # Post-norm: x = norm(x + f(x))
             hidden_states, _ = self.self_attn(
                 hidden_states=hidden_states,
@@ -371,7 +397,7 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
             )
             hidden_states = residual + hidden_states
             hidden_states = self.post_attention_layernorm(hidden_states)
-        elif self.norm_pos == "mid":
+        elif self._attn_norm_pos == "mid":
             # Mid-norm: x = x + norm(f(x))
             hidden_states, _ = self.self_attn(
                 hidden_states=hidden_states,
@@ -385,7 +411,7 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
             )
             hidden_states = self.post_attention_layernorm(hidden_states)
             hidden_states = residual + hidden_states
-        elif self.norm_pos == "sandwich":
+        elif self._attn_norm_pos == "sandwich":
             # Sandwich-norm: x = x + norm(f(norm(x)))
             hidden_states = self.pre_attention_layernorm(hidden_states)
             hidden_states, _ = self.self_attn(
@@ -404,22 +430,26 @@ class Olmo3CustomDecoderLayer(GradientCheckpointingLayer):
         # MLP block with configurable normalization position
         residual = hidden_states
 
-        if self.norm_pos == "pre":
+        if self._ffn_norm_pos == "none":
+            # No normalization: x = x + f(x)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
+        elif self._ffn_norm_pos == "pre":
             # Pre-norm: x = x + f(norm(x))
             hidden_states = self.pre_feedforward_layernorm(hidden_states)
             hidden_states = self.mlp(hidden_states)
             hidden_states = residual + hidden_states
-        elif self.norm_pos == "post":
+        elif self._ffn_norm_pos == "post":
             # Post-norm: x = norm(x + f(x))
             hidden_states = self.mlp(hidden_states)
             hidden_states = residual + hidden_states
             hidden_states = self.post_feedforward_layernorm(hidden_states)
-        elif self.norm_pos == "mid":
+        elif self._ffn_norm_pos == "mid":
             # Mid-norm: x = x + norm(f(x))
             hidden_states = self.mlp(hidden_states)
             hidden_states = self.post_feedforward_layernorm(hidden_states)
             hidden_states = residual + hidden_states
-        elif self.norm_pos == "sandwich":
+        elif self._ffn_norm_pos == "sandwich":
             # Sandwich-norm: x = x + norm(f(norm(x)))
             hidden_states = self.pre_feedforward_layernorm(hidden_states)
             hidden_states = self.mlp(hidden_states)

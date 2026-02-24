@@ -218,6 +218,102 @@ class Olmo3CustomModelTest(CausalLMModelTest, unittest.TestCase):
         self.assertTrue(hasattr(model.layers[0].self_attn, "gate_proj"))
         self.assertTrue(hasattr(model.layers[0].self_attn, "act_fn"))
 
+    @parameterized.expand([("qk",), ("qkv",), ("qkvc",), ("qkc",), ("c",)])
+    def test_model_intra_norm_pos(self, intra_norm_pos):
+        """Test that intra_norm_pos correctly creates normalization layers for the specified matrices."""
+        config, inputs = self.model_tester.prepare_config_and_inputs_for_common()
+        config.intra_norm_pos = intra_norm_pos
+        model = Olmo3CustomModel(config)
+        model.to(torch_device)
+        model.eval()
+
+        attn = model.layers[0].self_attn
+        self.assertEqual(hasattr(attn, "q_norm"), "q" in intra_norm_pos)
+        self.assertEqual(hasattr(attn, "k_norm"), "k" in intra_norm_pos)
+        self.assertEqual(hasattr(attn, "v_norm"), "v" in intra_norm_pos)
+        self.assertEqual(hasattr(attn, "c_norm"), "c" in intra_norm_pos)
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+        self.assertIsNotNone(outputs.last_hidden_state)
+        self.assertEqual(outputs.last_hidden_state.shape[0], inputs["input_ids"].shape[0])
+
+    @parameterized.expand([("pre",), ("post",), ("mid",), ("sandwich",), ("none",)])
+    def test_model_ffn_norm_pos(self, ffn_norm_pos):
+        """Test that ffn_norm_pos correctly applies FFN normalization."""
+        config, inputs = self.model_tester.prepare_config_and_inputs_for_common()
+        config.ffn_norm_pos = ffn_norm_pos
+        model = Olmo3CustomModel(config)
+        model.to(torch_device)
+        model.eval()
+
+        layer = model.layers[0]
+        self.assertEqual(hasattr(layer, "pre_feedforward_layernorm"), ffn_norm_pos in ["pre", "sandwich"])
+        self.assertEqual(hasattr(layer, "post_feedforward_layernorm"), ffn_norm_pos in ["post", "mid", "sandwich"])
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+        self.assertIsNotNone(outputs.last_hidden_state)
+        self.assertEqual(outputs.last_hidden_state.shape[0], inputs["input_ids"].shape[0])
+
+    def test_model_hybrid_norm_pos(self):
+        """Test that norm_pos='hybrid' forces intra_norm_pos='qkv' and ffn_norm_pos='none'."""
+        config, inputs = self.model_tester.prepare_config_and_inputs_for_common()
+        config.norm_pos = "hybrid"
+        # Verify config overrides
+        self.assertEqual(config.intra_norm_pos, "qkv")
+        self.assertEqual(config.ffn_norm_pos, "none")
+
+        model = Olmo3CustomModel(config)
+        model.to(torch_device)
+        model.eval()
+
+        layer = model.layers[0]
+        # Hybrid uses pre-norm for attention
+        self.assertEqual(layer._attn_norm_pos, "pre")
+        self.assertEqual(layer._ffn_norm_pos, "none")
+        self.assertTrue(hasattr(layer, "pre_attention_layernorm"))
+        self.assertFalse(hasattr(layer, "post_attention_layernorm"))
+        self.assertFalse(hasattr(layer, "pre_feedforward_layernorm"))
+        self.assertFalse(hasattr(layer, "post_feedforward_layernorm"))
+
+        # v_norm should be present (intra_norm_pos='qkv')
+        attn = layer.self_attn
+        self.assertTrue(hasattr(attn, "q_norm"))
+        self.assertTrue(hasattr(attn, "k_norm"))
+        self.assertTrue(hasattr(attn, "v_norm"))
+        self.assertFalse(hasattr(attn, "c_norm"))
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+        self.assertIsNotNone(outputs.last_hidden_state)
+        self.assertEqual(outputs.last_hidden_state.shape[0], inputs["input_ids"].shape[0])
+
+    def test_model_attn_act(self):
+        """Test that attn_act sets a different activation for gated attention vs FFN."""
+        config, inputs = self.model_tester.prepare_config_and_inputs_for_common()
+        config.use_gated_attention = True
+        config.attn_act = "gelu"
+        config.hidden_act = "silu"
+        model = Olmo3CustomModel(config)
+        model.to(torch_device)
+        model.eval()
+
+        # The attention gate uses attn_act (gelu), MLP uses hidden_act (silu)
+        attn = model.layers[0].self_attn
+        mlp = model.layers[0].mlp
+        self.assertTrue(hasattr(attn, "act_fn"))
+        # Verify activations differ by checking their output on the same input
+        self.assertEqual(config.attn_act, "gelu")
+        self.assertEqual(config.hidden_act, "silu")
+        x = torch.randn(4, device=torch_device)
+        self.assertFalse(torch.allclose(attn.act_fn(x), mlp.act_fn(x)))
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+        self.assertIsNotNone(outputs.last_hidden_state)
+        self.assertEqual(outputs.last_hidden_state.shape[0], inputs["input_ids"].shape[0])
+
 
 @require_torch
 class Olmo3CustomIntegrationTest(unittest.TestCase):
