@@ -79,11 +79,22 @@ class Olmo3CustomConfig(PreTrainedConfig):
             Attention pattern for each layer. Defaults to sliding window attention
             for 3 out of 4 layers, and full attention for every 4th layer.
         norm_pos (`str`, *optional*, defaults to `"mid"`):
-            Position of layer normalization in the transformer block. Options are:
+            Position of layer normalization in the attention block. Options are:
             - "pre": Pre-normalization (x = x + f(norm(x)))
             - "post": Post-normalization (x = norm(x + f(x)))
             - "mid": Mid-normalization (x = x + norm(f(x)))
             - "sandwich": Sandwich normalization (x = x + norm(f(norm(x))))
+            - "hybrid": HybridNorm — forces intra_norm_pos="qkv" and ffn_norm_pos="none", uses pre-norm for attention
+        intra_norm_pos (`str`, *optional*, defaults to `"qk"`):
+            Which internal matrices in the attention layer to normalize. This generalizes QK-normalization.
+            Options are: "qk", "qkv", "qkvc", "qkc", "c".
+            - "q", "k", "v" refer to query, key, value projections.
+            - "c" refers to the context matrix C = softmax(QK^T/sqrt(d)) * V (attention output before projection).
+            Overridden to "qkv" when norm_pos="hybrid".
+        ffn_norm_pos (`str`, *optional*, defaults to `"pre"`):
+            Position of layer normalization in the FFN block. Same logic as norm_pos for the attention block.
+            Options are: "pre", "post", "mid", "sandwich", "none".
+            "none" disables normalization in the FFN entirely. Overridden to "none" when norm_pos="hybrid".
         norm_type (`str`, *optional*, defaults to `"rmsnorm"`):
             Type of normalization to use. Options are:
             - "rmsnorm": RMS normalization (uses rms_norm_eps)
@@ -95,7 +106,9 @@ class Olmo3CustomConfig(PreTrainedConfig):
             Initial value for shift parameter in Derf and DyT normalization.
         use_gated_attention (`bool`, *optional*, defaults to `False`):
             Whether to use gated attention mechanism as described in "Gated Attention for Large Language Models".
-            When enabled, applies a gating mechanism to attention values using the same activation as the MLP.
+            When enabled, applies a gating mechanism to attention values using attn_act activation.
+        attn_act (`str` or `function`, *optional*, defaults to `"swish"`):
+            The non-linear activation function used in the gated attention mechanism (when use_gated_attention=True).
 
     ```python
     >>> from transformers import Olmo3CustomModel, Olmo3CustomConfig
@@ -151,10 +164,13 @@ class Olmo3CustomConfig(PreTrainedConfig):
         sliding_window: int | None = 4096,
         layer_types: list[str] | None = None,
         norm_pos: str | None = "mid",
+        intra_norm_pos: str | None = "qk",
+        ffn_norm_pos: str | None = "pre",
         norm_type: str | None = "rmsnorm",
         alpha_init_value: float | None = 1.0,
         shift_init_value: float | None = 0.0,
         use_gated_attention: bool | None = False,
+        attn_act: str | None = "swish",
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -189,10 +205,27 @@ class Olmo3CustomConfig(PreTrainedConfig):
         layer_type_validation(self.layer_types, self.num_hidden_layers)
 
         # Validate and set norm_pos
-        valid_norm_pos = ["pre", "post", "mid", "sandwich"]
+        valid_norm_pos = ["pre", "post", "mid", "sandwich", "hybrid"]
         if norm_pos not in valid_norm_pos:
             raise ValueError(f"Invalid norm_pos '{norm_pos}'. Must be one of {valid_norm_pos}. Got: {norm_pos}")
         self.norm_pos = norm_pos
+
+        # When norm_pos="hybrid" (HybridNorm), override intra_norm_pos and ffn_norm_pos
+        if norm_pos == "hybrid":
+            intra_norm_pos = "qkv"
+            ffn_norm_pos = "none"
+
+        # Validate and set intra_norm_pos
+        valid_intra_norm_pos = ["qk", "qkv", "qkvc", "qkc", "c"]
+        if intra_norm_pos not in valid_intra_norm_pos:
+            raise ValueError(f"Invalid intra_norm_pos '{intra_norm_pos}'. Must be one of {valid_intra_norm_pos}.")
+        self.intra_norm_pos = intra_norm_pos
+
+        # Validate and set ffn_norm_pos
+        valid_ffn_norm_pos = ["pre", "post", "mid", "sandwich", "none"]
+        if ffn_norm_pos not in valid_ffn_norm_pos:
+            raise ValueError(f"Invalid ffn_norm_pos '{ffn_norm_pos}'. Must be one of {valid_ffn_norm_pos}.")
+        self.ffn_norm_pos = ffn_norm_pos
 
         # Validate and set norm_type
         valid_norm_types = ["rmsnorm", "dyt", "derf"]
@@ -203,6 +236,7 @@ class Olmo3CustomConfig(PreTrainedConfig):
         self.shift_init_value = shift_init_value
 
         self.use_gated_attention = use_gated_attention
+        self.attn_act = attn_act
 
         self.rope_parameters = rope_parameters
 
