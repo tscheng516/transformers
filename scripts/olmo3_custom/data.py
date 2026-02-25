@@ -1,7 +1,7 @@
 """
 Shard-based dataset utilities for offline, streaming-friendly training.
 
-Shards are stored as uint16 .npy files plus an index.json that records
+Shards are stored as uint32 .npy files plus an index.json that records
 their paths and token counts.  The loader maps each file into memory so
 only the pages that are actually accessed are loaded from disk.
 """
@@ -44,13 +44,13 @@ def save_index(shard_dir: str, index: dict) -> None:
 # ── shard writers ──────────────────────────────────────────────────────────────
 
 def write_shard(shard_path: str, token_ids: List[int]) -> None:
-    """Save *token_ids* to a memory-mappable uint16 .npy file."""
-    arr = np.array(token_ids, dtype=np.uint16)
+    """Save *token_ids* to a memory-mappable uint32 .npy file."""
+    arr = np.array(token_ids, dtype=np.uint32)
     np.save(shard_path, arr)
 
 
 def load_shard(shard_path: str) -> np.ndarray:
-    """Memory-map a shard file, returning a uint16 array."""
+    """Memory-map a shard file, returning a uint32 array."""
     return np.load(shard_path, mmap_mode="r")
 
 

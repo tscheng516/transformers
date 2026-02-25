@@ -3,7 +3,7 @@
 tokenize_dataset.py — offline tokenization into memory-mappable shards.
 
 Reads raw text from a HuggingFace dataset (e.g. wikitext-2-raw-v1) or from
-local text / jsonl files and writes uint16 .npy shards + an index.json so
+local text / jsonl files and writes uint32 .npy shards + an index.json so
 that training can proceed without any network access.
 
 Quick-start examples
