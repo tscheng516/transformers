@@ -107,6 +107,7 @@ def make_olmo3_custom_config_300m(
     Adjust *hidden_size* / *num_hidden_layers* / *intermediate_size* to
     change the model size.  Call :func:`estimate_param_count` to verify.
     """
+    # Accept additional config overrides via kwargs and keep sensible defaults
     return Olmo3CustomConfig(
         vocab_size=vocab_size,
         hidden_size=hidden_size,
@@ -117,7 +118,7 @@ def make_olmo3_custom_config_300m(
         max_position_embeddings=max_position_embeddings,
         norm_type=norm_type,
         norm_pos=norm_pos,
-        # Stable defaults for training
+        # Stable defaults for training (can be overridden via kwargs)
         rms_norm_eps=1e-5,
         initializer_range=0.02,
         attention_dropout=0.0,
@@ -265,6 +266,42 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--norm_pos", default="pre",
                    choices=["pre", "post", "mid", "sandwich", "hybrid"])
 
+    # Additional config flags added to Olmo3CustomConfig
+    p.add_argument("--vocab_size", type=int, default=50304,
+                   help="Model vocabulary size.")
+    p.add_argument("--hidden_act", default="silu",
+                   help="Activation in hidden MLPs.")
+    p.add_argument("--initializer_range", type=float, default=0.02,
+                   help="Initializer std dev for weight matrices.")
+    p.add_argument("--tie_word_embeddings", action="store_true",
+                   help="Tie input and output embeddings in the model.")
+    p.add_argument("--attention_bias", action="store_true",
+                   help="Use biases in attention projections.")
+    p.add_argument("--attention_dropout", type=float, default=0.0,
+                   help="Dropout for attention probabilities.")
+    p.add_argument("--rms_norm_eps", type=float, default=1e-5,
+                   help="Epsilon for RMSNorm layers.")
+    p.add_argument("--sliding_window", type=int, default=4096,
+                   help="Sliding window size for sliding-window attention.")
+    p.add_argument("--layer_types", default=None,
+                   help="Comma-separated list of layer types (e.g. 'sliding_attention,full_attention').")
+    p.add_argument("--intra_norm_pos", default="qk",
+                   choices=["qk", "qkv", "qkvc", "qkc", "c"],
+                   help="Which internal matrices to normalize in attention.")
+    p.add_argument("--ffn_norm_pos", default="pre",
+                   choices=["pre", "post", "mid", "sandwich", "none"],
+                   help="Normalization position for FFN block.")
+    p.add_argument("--alpha_init_value", type=float, default=1.0,
+                   help="Initial alpha for DyT/Derf norms.")
+    p.add_argument("--shift_init_value", type=float, default=0.0,
+                   help="Initial shift for DyT/Derf norms.")
+    p.add_argument("--use_gated_attention", action="store_true",
+                   help="Enable gated attention mechanism.")
+    p.add_argument("--attn_act", default="swish",
+                   help="Activation for gated attention.")
+    p.add_argument("--rope_theta", type=float, default=None,
+                   help="If set, creates rope_parameters={'rope_theta': value} for RoPE config.")
+
     # --- training ---
     p.add_argument("--output_dir", required=True)
     p.add_argument("--num_train_epochs", type=int, default=3)
@@ -341,6 +378,36 @@ def main() -> None:
         norm_type=args.norm_type,
         norm_pos=args.norm_pos,
     )
+
+    # Parse optional complex fields from CLI and attach to config
+    # layer_types: optional comma-separated string -> list[str]
+    layer_types = None
+    if args.layer_types:
+        layer_types = [s.strip() for s in args.layer_types.split(",") if s.strip()]
+
+    rope_parameters = None
+    if args.rope_theta is not None:
+        rope_parameters = {"rope_theta": args.rope_theta}
+
+    # Override/attach additional fields on the config object so CLI controls them.
+    # These attributes mirror the Olmo3CustomConfig constructor arguments.
+    config.vocab_size = args.vocab_size
+    config.hidden_act = args.hidden_act
+    config.initializer_range = args.initializer_range
+    config.tie_word_embeddings = bool(args.tie_word_embeddings)
+    config.attention_bias = bool(args.attention_bias)
+    config.attention_dropout = float(args.attention_dropout)
+    config.rms_norm_eps = float(args.rms_norm_eps)
+    config.sliding_window = int(args.sliding_window)
+    if layer_types is not None:
+        config.layer_types = layer_types
+    config.intra_norm_pos = args.intra_norm_pos
+    config.ffn_norm_pos = args.ffn_norm_pos
+    config.alpha_init_value = float(args.alpha_init_value)
+    config.shift_init_value = float(args.shift_init_value)
+    config.use_gated_attention = bool(args.use_gated_attention)
+    config.attn_act = args.attn_act
+    config.rope_parameters = rope_parameters
 
     logger.info("Model config:\n%s", config.to_json_string())
     print_model_size(config)
